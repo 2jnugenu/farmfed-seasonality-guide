@@ -1,0 +1,257 @@
+---
+title: "12-Month Processing Map"
+output:
+  html_document:
+    self_contained: true
+    theme: null
+    highlight: null
+    css: null
+---
+```{=html}
+<style>
+body { background:#f5f0e8; font-family:'Segoe UI',Arial,sans-serif; margin:0; padding:0; }
+.page-header {
+  background:#1e3a2a; color:#f0e8d0; padding:32px 48px 24px;
+  border-bottom:3px solid #c4721a; margin-bottom:0;
+}
+.page-header h1 { font-size:36px; margin:0 0 6px; }
+.page-header p  { font-size:13px; color:#b0a888; margin:0; }
+.controls {
+  background:#faf6ee; border-bottom:1px solid #d4c8a8;
+  padding:12px 48px; position:sticky; top:0; z-index:100;
+  box-shadow:0 2px 8px rgba(0,0,0,0.06);
+}
+.controls label { font-size:11px; color:#8a7d60; text-transform:uppercase;
+  letter-spacing:1px; margin-right:8px; }
+.controls select { padding:4px 10px; border-radius:16px; border:1.5px solid #d4c8a8;
+  font-size:12px; background:#fff; color:#1a1a14; cursor:pointer; }
+.main { max-width:1300px; margin:0 auto; padding:24px 48px 64px; }
+.section-header {
+  font-size:22px; font-weight:700; color:#1e3a2a;
+  border-bottom:2px solid #1e3a2a; padding-bottom:8px;
+  margin:32px 0 12px;
+}
+.cards-grid {
+  display:grid;
+  grid-template-columns:repeat(auto-fill, minmax(340px, 1fr));
+  gap:16px;
+}
+.variety-card {
+  background:#faf6ee; border:1px solid #d4c8a8; border-radius:6px; padding:14px;
+}
+.card-name  { font-weight:700; font-size:14px; color:#1a1a14; margin-bottom:2px; }
+.card-cat   { font-size:10px; color:#8a7d60; text-transform:uppercase;
+  letter-spacing:1px; margin-bottom:10px; }
+.chart-area { width:100%; }
+.bars-row   { display:flex; width:100%; height:72px; align-items:flex-end; gap:1px; }
+.bar-wrap   { flex:1; display:flex; flex-direction:column; align-items:center; }
+.bar-fill   { width:100%; border-radius:2px 2px 0 0; min-height:2px; }
+.dots-row   { display:flex; width:100%; height:14px; align-items:center; gap:1px; margin-top:2px; }
+.dot-cell   { flex:1; display:flex; justify-content:center; align-items:center; }
+.demand-dot { background:#c4721a; border-radius:50%; }
+.labels-row { display:flex; width:100%; gap:1px; margin-top:3px; }
+.month-lbl  { flex:1; text-align:center; font-size:8px; color:#aaa; }
+.legend     { display:flex; gap:20px; flex-wrap:wrap; padding:10px 0 4px;
+  font-size:11px; color:#6a6050; }
+.legend-item { display:flex; align-items:center; gap:6px; }
+.legend-swatch { width:14px; height:14px; border-radius:2px; }
+.legend-dot-ex { width:9px; height:9px; border-radius:50%; background:#c4721a; }
+</style>
+```
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE)
+
+library(tidyverse)
+library(readxl)
+library(lubridate)
+
+marty <- read_excel("cleaned_compiled_marty_data.xlsx")
+cs    <- read_excel("clint and serena data cleaned.xlsx")
+tt    <- read_excel("tulip tree data combined.xlsx")
+
+marty <- marty %>%
+  mutate(
+    date           = as.Date(date),
+    month_num      = month(date),
+    total_quantity = as.numeric(total_quantity),
+    total_price    = as.numeric(total_price),
+    price_per      = ifelse(total_quantity > 0, total_price / total_quantity, NA)
+  )
+
+cs <- cs %>%
+  mutate(
+    date           = as.Date(date),
+    month_num      = month(date),
+    price_per      = as.numeric(gsub("\\$", "", price_per)),
+    total_quantity = as.numeric(total_quantity)
+  )
+
+tt <- tt %>%
+  mutate(
+    date      = as.Date(as.numeric(date), origin = "1899-12-30"),
+    month_num = month(date),
+    cleaned_product_name = tolower(trimws(paste0(
+      product_category,
+      ifelse(!is.na(product_type),     paste0(" - ", product_type),     ""),
+      ifelse(!is.na(product_specific), paste0(" - ", product_specific), "")
+    ))),
+    total_quantity = as.numeric(total_quantity)
+  )
+
+supply_monthly <- marty %>%
+  filter(!is.na(cleaned_product_name)) %>%
+  group_by(cleaned_product_name, product_category, month_num) %>%
+  summarise(
+    supply    = sum(total_quantity, na.rm = TRUE),
+    avg_price = mean(price_per,     na.rm = TRUE),
+    .groups   = "drop"
+  )
+
+demand_monthly <- bind_rows(
+  cs %>% filter(!is.na(cleaned_product_name)) %>%
+    group_by(cleaned_product_name, month_num) %>%
+    summarise(demand = sum(total_quantity, na.rm=TRUE), .groups="drop"),
+  tt %>% filter(!is.na(cleaned_product_name)) %>%
+    group_by(cleaned_product_name, month_num) %>%
+    summarise(demand = sum(total_quantity, na.rm=TRUE), .groups="drop")
+) %>%
+  group_by(cleaned_product_name, month_num) %>%
+  summarise(demand = sum(demand, na.rm=TRUE), .groups="drop")
+
+full_grid <- supply_monthly %>%
+  left_join(demand_monthly, by = c("cleaned_product_name","month_num")) %>%
+  mutate(demand = replace_na(demand, 0))
+
+MONTHS <- c("Jan","Feb","Mar","Apr","May","Jun",
+            "Jul","Aug","Sep","Oct","Nov","Dec")
+```
+```{=html}
+<div class="page-header">
+  <h1>Marty's Market — 12-Month Processing Almanac</h1>
+  <p>Supply volume · Price intensity (bar color) · Consumer demand (amber dots)</p>
+</div>
+
+<div class="controls">
+  <label>Category:</label>
+  <select id="catFilter" onchange="filterCards(this.value)">
+    <option value="all">All Categories</option>
+  </select>
+  &nbsp;&nbsp;
+  <span class="legend">
+    <span class="legend-item">
+      <span class="legend-swatch" style="background:linear-gradient(#1e5a2a,#6ab87a)"></span>
+      Bar height = supply volume; darker = higher price
+    </span>
+    <span class="legend-item">
+      <span class="legend-dot-ex"></span>
+      Dot = consumer demand (size = volume)
+    </span>
+  </span>
+</div>
+
+<script>
+function filterCards(cat) {
+  document.querySelectorAll('.variety-card').forEach(el => {
+    el.closest('.card-slot').style.display =
+      (cat === 'all' || el.dataset.category === cat) ? '' : 'none';
+  });
+  document.querySelectorAll('.section-header').forEach(el => {
+    const grid = el.nextElementSibling;
+    if (!grid) return;
+    const anyVisible = [...grid.querySelectorAll('.card-slot')]
+      .some(s => s.style.display !== 'none');
+    el.style.display = anyVisible ? '' : 'none';
+    grid.style.display = anyVisible ? '' : 'none';
+  });
+}
+window.addEventListener('DOMContentLoaded', () => {
+  const sel = document.getElementById('catFilter');
+  const cats = new Set();
+  document.querySelectorAll('.variety-card').forEach(el => cats.add(el.dataset.category));
+  [...cats].sort().forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c; opt.textContent = c;
+    sel.appendChild(opt);
+  });
+});
+</script>
+```
+```{r render_cards, results='asis'}
+cat('<div class="main">\n')
+
+categories <- full_grid %>%
+  distinct(product_category) %>%
+  arrange(product_category) %>%
+  pull(product_category)
+
+for (catname in categories) {
+
+  cat_varieties <- full_grid %>%
+    filter(product_category == catname) %>%
+    pull(cleaned_product_name) %>%
+    unique() %>% sort()
+
+  cat(sprintf('<div class="section-header">%s</div>\n<div class="cards-grid">\n', catname))
+
+  for (v in cat_varieties) {
+
+    vdata <- data.frame(month_num = 1:12) %>%
+      left_join(
+        full_grid %>% filter(cleaned_product_name == v) %>% arrange(month_num),
+        by = "month_num"
+      ) %>%
+      mutate(
+        supply    = replace_na(supply,    0),
+        avg_price = replace_na(avg_price, 0),
+        demand    = replace_na(demand,    0)
+      )
+
+    max_supply <- max(vdata$supply,    1)
+    max_price  <- max(vdata$avg_price, 1)
+    max_demand <- max(vdata$demand,    1)
+
+    bars <- dots <- labels <- ""
+
+    for (i in 1:12) {
+      s  <- vdata$supply[i]
+      p  <- vdata$avg_price[i]
+      d  <- vdata$demand[i]
+
+      h     <- if (s > 0) max(3, round(log1p(s) / log1p(max_supply) * 100)) else 0
+      pr    <- if (max_price > 0) p / max_price else 0
+      col   <- sprintf("rgb(%d,%d,%d)",
+                       round(30  + (1-pr)*120),
+                       round(90  + (1-pr)*90),
+                       round(42  + (1-pr)*20))
+      ds    <- if (d > 0) max(4, min(13, round(d / max_demand * 13))) else 0
+
+      bars <- paste0(bars, sprintf(
+        '<div class="bar-wrap"><div class="bar-fill" style="height:%dpx;background:%s;"></div></div>',
+        h, col))
+      dots <- paste0(dots, sprintf('<div class="dot-cell">%s</div>',
+        if (ds > 0) sprintf(
+          '<div class="demand-dot" style="width:%dpx;height:%dpx;"></div>', ds, ds) else ""))
+      labels <- paste0(labels,
+        sprintf('<div class="month-lbl">%s</div>', MONTHS[i]))
+    }
+
+    cat(sprintf(
+'<div class="card-slot">
+  <div class="variety-card" data-category="%s">
+    <div class="card-name">%s</div>
+    <div class="card-cat">%s</div>
+    <div class="chart-area">
+      <div class="bars-row">%s</div>
+      <div class="dots-row">%s</div>
+      <div class="labels-row">%s</div>
+    </div>
+  </div>
+</div>\n',
+      catname, v, catname, bars, dots, labels))
+  }
+
+  cat('</div>\n')
+}
+
+cat('</div>\n')
+```
